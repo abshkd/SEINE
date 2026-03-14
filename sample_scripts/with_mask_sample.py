@@ -44,6 +44,28 @@ from natsort import natsorted
 from diffusers.utils.import_utils import is_xformers_available
 import pdb
 
+def get_module_dtype(module, default=torch.float32):
+    for parameter in module.parameters():
+        if parameter.is_floating_point():
+            return parameter.dtype
+    for buffer in module.buffers():
+        if buffer.is_floating_point():
+            return buffer.dtype
+    return default
+
+def cast_module_if_supported(module, dtype, module_name):
+    if getattr(module, "is_quantized", False):
+        print(f"Warning: {module_name} is quantized; skipping cast to {dtype}.")
+        return module
+
+    try:
+        return module.to(dtype=dtype)
+    except ValueError as error:
+        if "Casting a quantized model to a new `dtype` is unsupported" in str(error):
+            print(f"Warning: {module_name} rejected dtype cast due to quantization; using original dtype.")
+            return module
+        raise
+
 def get_input(args):
     input_path = args.input_path
     transform_video = transforms.Compose([
@@ -115,6 +137,7 @@ def auto_inpainting(args, video_input, masked_video, mask, prompt, vae, text_enc
     b,f,c,h,w=video_input.shape
     latent_h = args.image_size[0] // 8
     latent_w = args.image_size[1] // 8
+    vae_dtype = get_module_dtype(vae, default=masked_video.dtype)
 
     # prepare inputs
     if args.use_fp16:
@@ -126,8 +149,10 @@ def auto_inpainting(args, video_input, masked_video, mask, prompt, vae, text_enc
 
 
     masked_video = rearrange(masked_video, 'b f c h w -> (b f) c h w').contiguous()
+    masked_video = masked_video.to(dtype=vae_dtype)
     masked_video = vae.encode(masked_video).latent_dist.sample().mul_(0.18215)
     masked_video = rearrange(masked_video, '(b f) c h w -> b c f h w', b=b).contiguous()
+    masked_video = masked_video.to(dtype=z.dtype)
     mask = torch.nn.functional.interpolate(mask[:,:,0,:], size=(latent_h, latent_w)).unsqueeze(1)
    
     # classifier_free_guidance
@@ -165,6 +190,7 @@ def auto_inpainting(args, video_input, masked_video, mask, prompt, vae, text_enc
         samples = samples.to(dtype=torch.float16)
 
     video_clip = samples[0].permute(1, 0, 2, 3).contiguous() # [16, 4, 32, 32]
+    video_clip = video_clip.to(dtype=vae_dtype)
     video_clip = vae.decode(video_clip / 0.18215).sample # [16, 3, 256, 256]
     return video_clip
 
@@ -208,9 +234,9 @@ def main(args):
     text_encoder = TextEmbedder(pretrained_model_path).to(device)
     if args.use_fp16:
         print('Warnning: using half percision for inferencing!')
-        vae.to(dtype=torch.float16)
-        model.to(dtype=torch.float16)
-        text_encoder.to(dtype=torch.float16)
+        vae = cast_module_if_supported(vae, torch.float16, "VAE")
+        model = cast_module_if_supported(model, torch.float16, "UNet")
+        text_encoder = cast_module_if_supported(text_encoder, torch.float16, "text encoder")
 
     # prompt:
     prompt = args.text_prompt

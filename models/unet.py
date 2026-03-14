@@ -215,8 +215,14 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             )
             self.down_blocks.append(down_block)
 
+        # Accept 2D config aliases when loading pretrained UNet2D weights into this 3D UNet.
+        mid_block_type_map = {
+            "UNetMidBlock2DCrossAttn": "UNetMidBlock3DCrossAttn",
+        }
+        normalized_mid_block_type = mid_block_type_map.get(mid_block_type, mid_block_type)
+
         # mid
-        if mid_block_type == "UNetMidBlock3DCrossAttn":
+        if normalized_mid_block_type == "UNetMidBlock3DCrossAttn":
             self.mid_block = UNetMidBlock3DCrossAttn(
                 in_channels=block_out_channels[-1],
                 temb_channels=time_embed_dim,
@@ -235,7 +241,9 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
                 rotary_emb=rotary_emb,
             )
         else:
-            raise ValueError(f"unknown mid_block_type : {mid_block_type}")
+            raise ValueError(
+                f"unknown mid_block_type : {mid_block_type} (normalized: {normalized_mid_block_type})"
+            )
 
         # count how many layers upsample the videos
         self.num_upsamplers = 0
@@ -597,6 +605,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             "CrossAttnUpBlock3D",
             "CrossAttnUpBlock3D"
         ]
+        config["mid_block_type"] = "UNetMidBlock3DCrossAttn"
 
         # config["use_first_frame"] = True
 
