@@ -142,6 +142,33 @@ We disclaim responsibility for user-generated content. The model was not trained
 ## Acknowledgements
 The code is built upon [LaVie](https://github.com/Vchitect/LaVie), [diffusers](https://github.com/huggingface/diffusers) and [Stable Diffusion](https://github.com/CompVis/stable-diffusion), we thank all the contributors for open-sourcing. 
 
+## Addendum: Docker + API Integration
+This project now includes a Dockerized API workflow for running SEINE inference with GPU support.
+
+### Container Details
+- Base image: `nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04`
+- Python: system-wide `3.10`
+- Runtime API: `FastAPI` + `uvicorn`
+- Inference endpoint: `POST /generate`
+
+### Model Downloads in Container Startup
+At startup, the container downloads models (if missing):
+- `hf download Vchitect/SEINE --local-dir pretrained`
+- `hf download CompVis/stable-diffusion-v1-4 --local-dir pretrained/stable-diffusion-v1-4`
+
+### API Request
+`POST /generate` accepts:
+- `config_name` (`sample_i2v.yaml` or `sample_transition.yaml`)
+- `image` (required)
+- `image_end` (optional, used for transition config)
+- `text_prompt` (optional override)
+
+The endpoint returns the generated `.mp4` file directly.
+
+### Credits
+Addendum and Docker/API integration by **Abhishek Dujari**  
+GitHub: [abshkd](https://github.com/abshkd)  
+Hugging Face: [ovedrive](https://huggingface.co/ovedrive)
 
 ## License
 The code is licensed under Apache-2.0, model weights are fully open for academic research and also allow **free** commercial usage. To apply for a commercial license, please contact vchitect@pjlab.org.cn.
