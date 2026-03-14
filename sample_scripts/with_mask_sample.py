@@ -10,6 +10,7 @@ Sample new images from a pre-trained DiT.
 import os
 import sys
 import math
+import subprocess
 try:
     import utils
     from diffusion import create_diffusion
@@ -65,6 +66,64 @@ def cast_module_if_supported(module, dtype, module_name):
             print(f"Warning: {module_name} rejected dtype cast due to quantization; using original dtype.")
             return module
         raise
+
+def write_video_with_fallback(save_video_path, video, fps=8):
+    try:
+        torchvision.io.write_video(save_video_path, video, fps=fps)
+        return
+    except Exception as error:
+        if "PyAV is not installed" not in str(error):
+            raise
+        print("Warning: PyAV is unavailable, falling back to ffmpeg for MP4 encoding.")
+
+    if video.device.type != "cpu":
+        video = video.cpu()
+    if video.dtype != torch.uint8:
+        video = video.to(dtype=torch.uint8)
+    video = video.contiguous()
+
+    if video.ndim != 4 or video.shape[-1] != 3:
+        raise ValueError(f"Expected video tensor shape [T, H, W, C=3], got {tuple(video.shape)}")
+
+    num_frames, height, width, channels = video.shape
+    if num_frames <= 0 or height <= 0 or width <= 0 or channels != 3:
+        raise ValueError(f"Invalid video tensor shape: {tuple(video.shape)}")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{width}x{height}",
+        "-r",
+        str(fps),
+        "-i",
+        "-",
+        "-an",
+        "-vcodec",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        save_video_path,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            input=video.numpy().tobytes(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError as error:
+        raise RuntimeError("ffmpeg binary was not found; install ffmpeg in the runtime image.") from error
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="ignore")
+        raise RuntimeError(f"ffmpeg failed while writing video: {stderr}")
 
 def get_input(args):
     input_path = args.input_path
@@ -257,7 +316,7 @@ def main(args):
     video_clip = auto_inpainting(args, video_input, masked_video, mask, prompt, vae, text_encoder, diffusion, model, device,)
     video_ = ((video_clip * 0.5 + 0.5) * 255).add_(0.5).clamp_(0, 255).to(dtype=torch.uint8).cpu().permute(0, 2, 3, 1)
     save_video_path = os.path.join(args.save_path,  prompt_base+ '.mp4')
-    torchvision.io.write_video(save_video_path, video_, fps=8)
+    write_video_with_fallback(save_video_path, video_, fps=8)
     print(f'save in {save_video_path}')
 
 
